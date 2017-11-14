@@ -1,5 +1,8 @@
 (in-package #:cacle)
 
+#+5am
+(5am:in-suite cacle-tests)
+
 ;;; Generic base for caching policies that store entries in a linked list
 
 (defclass linked-list-replacement-policy (replacement-policy)
@@ -25,6 +28,13 @@
 
 (defmethod entry-removed ((policy linked-list-replacement-policy) (entry linked-cache-entry))
   (unlink entry))
+
+#+5am
+(defmethod list-entries ((policy linked-list-replacement-policy))
+  (loop with head = (slot-value policy 'head)
+	for i = (slot-value head 'next) then (slot-value i 'next)
+        until (eq i head)
+        collect i))
 
 ;;; Generic base for caching policies that store entries in an array
 
@@ -56,12 +66,19 @@
 	(let ((w 0))
 	  (loop for i below (length data)
 		for e = (aref data i)
-	        when (and e (/= w i))
-		do (setf (entry-index e) w
-			 (aref data w) e
-			 w (1+ w)))
+	        when e
+		do (if (= w i)
+		       (incf w)
+		       (setf (entry-index e) w
+			     (aref data w) e
+			     w (1+ w))))
 	  (setf (fill-pointer data) w
 		(fill-pointer unused) 0))))))
+
+#+5am
+(defmethod list-entries ((policy array-replacement-policy))
+  (loop for i across (slot-value policy 'data)
+        when i collect i))
 
 ;;; FIFO: Always discard the oldest entry
 
@@ -76,6 +93,25 @@
 	(unlink last)
 	last))))
 
+#+5am
+(5am:test fifo-replacement-policy
+  (with-testing-cache (cache 100 :policy :fifo)
+    (let* ((a (cache-fetch cache 20))
+	   (b (cache-fetch cache 30))
+	   (c (cache-fetch cache 40))
+	   (d (cache-fetch cache 25)))
+      (5am:is (cleaned-up-p a))
+      (5am:is (not (cleaned-up-p b)))
+      (5am:is (not (cleaned-up-p c)))
+      (5am:is (eq d (cache-fetch cache 25)))
+      (5am:is (eq c (cache-fetch cache 40)))
+      (5am:is (eq b (cache-fetch cache 30)))
+      (cache-fetch cache 35)
+      (5am:is (cleaned-up-p b))
+      (5am:is (not (cleaned-up-p c)))
+      (5am:is (not (cleaned-up-p d)))
+      (cache-sanity-check cache))))
+
 ;;; LIFO: Always discard the latest entry
 
 (defclass lifo-replacement-policy (linked-list-replacement-policy)
@@ -89,6 +125,23 @@
 	(unlink first)
 	first))))
 
+#+5am
+(5am:test lifo-replacement-policy
+  (with-testing-cache (cache 100 :policy :lifo)
+    (let* ((a (cache-fetch cache 20))
+	   (b (cache-fetch cache 30))
+	   (c (cache-fetch cache 40))
+	   (d (cache-fetch cache 25)))
+      (5am:is (cleaned-up-p c))
+      (5am:is (not (cleaned-up-p b)))
+      (5am:is (not (cleaned-up-p a)))
+      (5am:is (eq a (cache-fetch cache 20)))
+      (5am:is (eq b (cache-fetch cache 30)))
+      (5am:is (eq d (cache-fetch cache 25)))
+      (cache-fetch cache 35)
+      (5am:is (cleaned-up-p d))
+      (cache-sanity-check cache))))
+
 ;;; LRU: Discard the Least Recently Used entry
 
 (defclass lru-replacement-policy (fifo-replacement-policy)
@@ -99,6 +152,25 @@
   (link-after entry (slot-value policy 'head))
   t)
 
+#+5am
+(5am:test lru-replacement-policy
+  (with-testing-cache (cache 100 :policy :lru)
+    (let* ((a (cache-fetch cache 20))
+	   (b (cache-fetch cache 30))
+	   (c (cache-fetch cache 40))
+	   (d (cache-fetch cache 25)))
+      (5am:is (cleaned-up-p a))
+      (5am:is (not (cleaned-up-p b)))
+      (5am:is (not (cleaned-up-p c)))
+      (5am:is (eq d (cache-fetch cache 25)))
+      (5am:is (eq c (cache-fetch cache 40)))
+      (5am:is (eq b (cache-fetch cache 30)))
+      (cache-fetch cache 22)
+      (5am:is (cleaned-up-p d))
+      (5am:is (not (cleaned-up-p c)))
+      (5am:is (not (cleaned-up-p b)))
+      (cache-sanity-check cache))))
+
 ;;; MRU: Discard the Most Recently Used entry
 
 (defclass mru-replacement-policy (lifo-replacement-policy)
@@ -108,6 +180,23 @@
   (unlink entry)
   (link-after entry (slot-value policy 'head))
   t)
+
+#+5am
+(5am:test mru-replacement-policy
+  (with-testing-cache (cache 100 :policy :mru)
+    (let* ((a (cache-fetch cache 20))
+	   (b (cache-fetch cache 30))
+	   (c (cache-fetch cache 40))
+	   (d (cache-fetch cache 25)))
+      (5am:is (cleaned-up-p c))
+      (5am:is (not (cleaned-up-p b)))
+      (5am:is (not (cleaned-up-p a)))
+      (5am:is (eq a (cache-fetch cache 20)))
+      (5am:is (eq d (cache-fetch cache 25)))
+      (5am:is (eq b (cache-fetch cache 30)))
+      (cache-fetch cache 35)
+      (5am:is (cleaned-up-p b))
+      (cache-sanity-check cache))))
 
 ;;; Random: Randomly discard one of the cached items
 
@@ -124,3 +213,14 @@
 		     finally (return e))))
 	(entry-removed policy e)
 	e))))
+
+#+5am
+(5am:test random-replacement-policy
+  (with-testing-cache (cache 100 :policy :fifo)
+    (let* ((a (cache-fetch cache 21))
+	   (b (cache-fetch cache 22))
+	   (c (cache-fetch cache 23))
+	   (d (cache-fetch cache 24)))
+      (cache-fetch cache 25)
+      (5am:is (= (count-if #'cleaned-up-p (list a b c d)) 1))
+      (cache-sanity-check cache))))

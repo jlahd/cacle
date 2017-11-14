@@ -1,5 +1,8 @@
 (in-package #:cacle)
 
+#+5am
+(5am:in-suite cacle-tests)
+
 ;;; Heap structure for LFU policies
 
 (defclass heap-cache-entry (indexed-cache-entry)
@@ -118,6 +121,29 @@
 	  (sink-down heap 0 t))
 	lightest))))
 
+#+5am
+(defmethod list-entries ((policy lfu-replacement-policy))
+  (coerce (slot-value policy 'heap) 'list))
+
+#+5am
+(5am:test lfu-replacement-policy
+  (with-testing-cache (cache 100 :policy :lfu)
+    (let* ((a (cache-fetch cache 21))
+	   (b (cache-fetch cache 22))
+	   (c (cache-fetch cache 23))
+	   (d (cache-fetch cache 24)))
+      (5am:is (= 0 (count-if #'cleaned-up-p (list a b c d))))
+      (cache-fetch cache 21)
+      (cache-fetch cache 23)
+      (cache-fetch cache 24)
+      (cache-fetch cache 23)
+      (cache-fetch cache 21)
+      (let ((e (cache-fetch cache 25)))
+	(5am:is (cleaned-up-p b))
+	(cache-fetch cache 26)
+	(5am:is (cleaned-up-p e))
+	(cache-sanity-check cache)))))
+
 ;;; Discard the Least Frequently Used entry (with dynamic aging)
 
 (defclass lfuda-replacement-policy (lfu-replacement-policy)
@@ -134,3 +160,32 @@
     (when target
       (setf (slot-value policy 'age) (cache-entry-weight target)))
     target))
+
+#+5am
+(5am:test lfuda-replacement-policy
+  (with-testing-cache (cache 100 :policy :lfuda :item-size-modulus 100)
+    (let* ((a (cache-fetch cache 125))
+	   (b (cache-fetch cache 225))
+	   (c (cache-fetch cache 325))
+	   (d (cache-fetch cache 425)))
+      (dotimes (i 40)
+	(5am:is (eq a (cache-fetch cache 125)))
+	(when (>= i 10)
+	  (5am:is (eq d (cache-fetch cache 425))))
+	(when (>= i 20)
+	  (5am:is (eq b (cache-fetch cache 225))))
+	(when (>= i 30)
+	  (5am:is (eq c (cache-fetch cache 325)))))
+      (dotimes (i 5)
+	(let ((e (cache-fetch cache 525)))
+	  (5am:is (cleaned-up-p c))
+	  (setf c (cache-fetch cache 625))
+	  (5am:is (cleaned-up-p e))))
+      (dotimes (i 100)
+	(cache-fetch cache 525)
+	(cache-fetch cache 625)
+	(cache-fetch cache 725)
+	(cache-fetch cache 825))
+      (5am:is (= 0 (count-if-not #'cleaned-up-p (list a b d))))
+      (cache-sanity-check cache))))
+

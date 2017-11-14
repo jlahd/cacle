@@ -7,3 +7,6 @@
 (defgeneric access-entry (policy entry))
 (defgeneric entry-removed (policy entry))
 (defgeneric evict-entry (policy size-hint))
+
+#+5am
+(defgeneric list-entries (policy))

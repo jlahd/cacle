@@ -1,5 +1,8 @@
 (in-package #:cacle)
 
+#+5am
+(5am:in-suite cacle-tests)
+
 (defclass cache ()
   ((max-size :initarg :max-size :reader cache-max-size)
    (size :initform 0)
@@ -27,6 +30,7 @@
 	 (error "Invalid policy ~s" policy))))
 
 (defun make-cache (max-size provider &key (test 'eql) (policy :fifo) lifetime cleanup)
+  "Create a new cache with the specified maximum size, provider function, and options."
   (when (or (keywordp policy)
 	    (and (listp policy)
 		 (keywordp (first policy))))
@@ -79,10 +83,12 @@
 	       (collect-cleanup (slot-value old 'data))))))
 
 (defmethod cache-size ((cache cache))
+  "Returns the current size of the cache."
   (bt:with-lock-held ((slot-value cache 'lock))
     (slot-value cache 'size)))
 
 (defmethod cache-count ((cache cache))
+  "Returns the current count of items in the cache."
   (bt:with-lock-held ((slot-value cache 'lock))
     (hash-table-count (slot-value cache 'hash))))
 
@@ -118,6 +124,7 @@
 (defsetf cache-lifetime set-cache-lifetime)
 
 (defmethod cache-fetch ((cache cache) key)
+  "Fetch an item for the given key. If the item is not currently in the cache, or has expired, it is fetched from the provider and stored in the cache."
   (with-slots (lock hash policy provider) cache
     (multiple-value-bind (hit data)
 	(bt:with-lock-held (lock)
@@ -170,6 +177,7 @@
 	    content)))))
 
 (defmethod cache-remove ((cache cache) key)
+  "Remove the item with the specified key from the cache."
   (with-slots (lock hash policy size) cache
     (with-collected-cleanups (cache)
       (bt:with-lock-held (lock)
@@ -183,6 +191,7 @@
 	    t))))))
 
 (defmethod cache-flush ((cache cache))
+  "Flush the cache, removing all items currently stored in it. If a cleanup function is defined for the cache, it is called for every item."
   (with-slots (lock hash policy size cleanup) cache
     (with-collected-cleanups (cache)
       (bt:with-lock-held (lock)
@@ -194,3 +203,102 @@
 	(clrhash hash)
 	(setf size 0)))
     nil))
+
+(defmethod cache-sanity-check ((cache cache))
+  (with-slots (lock hash policy size) cache
+    (bt:with-lock-held (lock)
+      (let ((seen (make-hash-table :test 'eq)))
+	(dolist (i (list-entries policy))
+	  (let ((v (gethash (entry-key i) hash)))
+	    (unless v
+	      (error "Cachen entry missing from hashtable: ~s" i))
+	    (unless (eq i v)
+	      (error "Cache entry mismatch: ~s in hashtable, ~s in policy" v i)))
+	  (setf (gethash i seen) t))
+	(let ((total 0))
+	  (maphash #'(lambda (k v)
+		       (declare (ignore k))
+		       (unless (gethash v seen)
+			 (error "Cache entry missing from policy: ~s" v))
+		       (incf total (entry-size v)))
+		   hash)
+	  (unless (= total size)
+	    (error "Cache size mismatch: cache reports ~a, sum of entries is ~a" size total))))))
+  t)
+
+#+5am
+(5am:test cache-basics
+  "Ensure that correct items are returned and everything is cleaned up on a flush."
+  (with-testing-cache (cache 200 :policy :fifo)
+    (let ((items (loop for i from 1 to 15
+		       for item = (cache-fetch cache i)
+		       do (5am:is (= (first item) i)))))
+      (cache-sanity-check cache)
+      (dolist (item items)
+	(5am:is (eq item (cache-fetch cache (first item)))))
+      (cache-flush cache)
+      (cache-sanity-check cache)
+      (dolist (item items)
+	(5am:is (cleaned-up-p item)))
+      (dolist (item items)
+	(let ((new (cache-fetch cache (first item))))
+	  (5am:is (not (eq item new)))
+	  (5am:is (not (cleaned-up-p new)))
+	  (5am:is (> (second new) 15))))
+      (cache-sanity-check cache))))
+
+#+5am
+(5am:test cache-size-limit
+  "Ensure that cache handles its size limit properly."
+  (with-testing-cache (cache 100 :policy :fifo)
+    (let ((a (cache-fetch cache 50))
+	  (b (cache-fetch cache 49))
+	  (c (cache-fetch cache 30)))
+      (cache-sanity-check cache)
+      (5am:is (cleaned-up-p a))
+      (5am:is (not (cleaned-up-p b)))
+      (5am:is (not (cleaned-up-p c)))
+      (let ((d (cache-fetch cache 101)))
+	(cache-sanity-check cache)
+	(5am:is (cleaned-up-p b))
+	(5am:is (cleaned-up-p c))
+	(5am:is (not (cleaned-up-p d)))
+	(let ((e (cache-fetch cache 1)))
+	  (cache-sanity-check cache)
+	  (5am:is (cleaned-up-p d))
+	  (5am:is (not (cleaned-up-p e))))))))
+
+#+5am
+(5am:test cache-threading
+  "Ensure that simulatenous requests from multiple threads are handled correctly."
+  (let ((object 0)
+	(lock (bt:make-lock "mutex for test cache")))
+    (flet ((provider (arg)
+	     (sleep 1)
+	     (bt:with-lock-held (lock)
+	       (values (list arg (incf object)) arg)))
+	   (cleanup (arg)
+	     (5am:is (listp arg))
+	     (5am:is (= 2 (length arg)))
+	     (setf (second arg) :cleaned-up)))
+      (let* ((cache (make-cache 100 #'provider :policy :fifo :cleanup #'cleanup))
+	     (threads (loop for i below 32
+			    collect (let ((key (1+ (mod i 8))))
+				      (bt:make-thread #'(lambda () (cache-fetch cache key))))))
+	     (a (mapcar #'bt:join-thread threads))
+	     (b (nthcdr 8 a))
+	     (c (nthcdr 8 b))
+	     (d (nthcdr 8 c)))
+	(loop for ai in a
+	      for bi in b
+	      for ci in c
+	      for di in d
+	      for key from 1
+	      do (5am:is (listp ai))
+	      do (5am:is (= 2 (length ai)))
+	      do (5am:is (= key (first ai)))
+	      do (5am:is (integerp (second ai)))
+	      do (5am:is (eq ai bi))
+	      do (5am:is (eq ai ci))
+	      do (5am:is (eq ai di)))
+	(cache-sanity-check cache)))))

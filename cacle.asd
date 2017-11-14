@@ -15,7 +15,8 @@
   ((:module cacle
     :pathname "src"
     :components ((:file "package")
-		 (:file "entry" :depends-on ("package"))
+		 (:file "testsuite" :depends-on ("package"))
+		 (:file "entry" :depends-on ("package" "testsuite"))
 		 (:file "policy" :depends-on ("entry"))
 		 (:file "simple-policies" :depends-on ("policy"))
 		 (:file "lfu-policies" :depends-on ("policy"))

@@ -1,5 +1,8 @@
 (in-package #:cacle)
 
+#+5am
+(5am:in-suite cacle-tests)
+
 (defclass cache-entry ()
   ((key :initarg :key :reader entry-key)
    (data)
@@ -67,6 +70,28 @@
 	  (slot-value entry 'next) n
 	  (slot-value entry 'prev) p)
     entry))
+
+#+5am
+(5am:test linked-entries
+  (let ((head (make-instance 'linked-cache-entry))
+	(e1 (make-instance 'linked-cache-entry))
+	(e2 (make-instance 'linked-cache-entry)))
+    (flet ((ensure-order (&rest list)
+	     (loop for i on list
+		   for a = (first i)
+		   for b = (or (second i) (first list))
+		   do (5am:is (entry-next a) b)
+		   do (5am:is (entry-previous b) a))))
+      (ensure-order head)
+      (link-after e1 head)
+      (ensure-order head e1)
+      (link-after e2 head)
+      (ensure-order head e2 e1)
+      (unlink e2)
+      (ensure-order head e1)
+      (ensure-order e2)
+      (link-before e2 head)
+      (ensure-order head e1 e2))))
 
 (defclass indexed-cache-entry (cache-entry)
   ((index :accessor entry-index)))
