@@ -7,6 +7,7 @@
   ((key :initarg :key :reader entry-key)
    (data)
    (pending :initarg :pending)
+   (busy :initform 0 :accessor entry-busy)
    (size :reader entry-size)
    (expiry :reader entry-expiry)))
 

@@ -15,7 +15,7 @@ only obtained from the data provider once, then distributed to all the
 threads that requested it.
 
 **Note!** While cacle itself is thread safe, the provider and cleanup
-functions are *not* called in a locked context (as they may take a
+functions are *not* called in a locked context, as they may take a
 long time to complete, during which fetches from the cache should be
 possible.  It is on the user's responsibility to protect against
 potential thread conflicts in the provider and cleanup functions.
@@ -62,22 +62,10 @@ holds the contents of the data block.
 TEST-PROVIDER
 ```
 
-To facilitate situations where data expiring from the cache needs some
-cleaning up - such as in the abovementioned case of the cache being on
-the disk - an optional cleanup function can be defined for the cache.
-This function is called whenever a block of data is discarded from the
-cache.
-
-```lisp
-* (defun test-cleanup (data)
-    (format t "Cleaning up: ~a~%" data))
-TEST-CLEANUP
-```
-
 Now we are ready to create a cache that manages these blocks of data.
 
 ```lisp
-* (defparameter *my-cache* (cacle:make-cache 100 #'test-provider :policy :lru :cleanup #'test-cleanup))
+* (defparameter *my-cache* (cacle:make-cache 100 #'test-provider :policy :lru))
 *MY-CACHE*
 * (cacle:cache-max-size *my-cache*)
 100
@@ -93,17 +81,23 @@ So, the cache is empty.  Let's fetch some data.
 * (cacle:cache-fetch *my-cache* 42)
 Providing data for key 42
 "value for 42"
+NIL
 ```
 
-Note the one-second delay in the function call.  Fetching the same
-data again does not cause a call to the provider, with the value
-returned immediately.
+Note the one-second delay in the function call.  The function returned
+two values; meaning of the second value (here `NIL`) will be discussed
+later in this document.
+
+etching the same data again does not cause a call to the provider,
+with the value returned immediately.
 
 ```lisp
 * (cacle:cache-fetch *my-cache* 42)
 "value for 42"
+NIL
 * (cacle:cache-fetch *my-cache* 42)
 "value for 42"
+NIL
 ```
 
 Next, widen the scope of requested items:
@@ -112,11 +106,14 @@ Next, widen the scope of requested items:
 * (cacle:cache-fetch *my-cache* 17)
 Providing data for key 17
 "value for 17"
+NIL
 * (cacle:cache-fetch *my-cache* 33)
 Providing data for key 33
 "value for 33"
+NIL
 * (cacle:cache-fetch *my-cache* 42)
 "value for 42"
+NIL
 * (cacle:cache-size *my-cache*)
 92
 * (cacle:cache-count *my-cache*)
@@ -129,13 +126,27 @@ happens if we now request data with a fresh key?
 ```lisp
 * (cacle:cache-fetch *my-cache* 24)
 Providing data for key 24
-Cleaning up: value for 17
 "value for 24"
+* (cacle:cache-size *my-cache*)
+99
+* (cacle:cache-count *my-cache*)
+3
 ```
 
 One of the stored blocks of data needs to go.  Since of the three keys
-in the cache, both 42 and 33 have been referenced after 17, 17 is
-discarded and the cleanup function called.
+in the cache, both 42 and 33 have been referenced after 17, 17 has been
+discarded:
+
+```lisp
+* (mapcar #'(lambda (key)
+              (cacle:cache-fetch *my-cache* key :only-if-cached t))
+          '(42 17 33 24))
+("value for 42" NIL "value for 33" "value for 24")
+```
+
+Setting the *:only-if-cached* option prevents the calling of the
+provider if the queried data is not found in the cache, just returning
+*NIL* instead.
 
 If multiple threads request the same data, the provider is only called
 once, with all threads eventually getting the same result data:
@@ -148,8 +159,6 @@ once, with all threads eventually getting the same result data:
 					                  (cacle:cache-fetch *my-cache* 72)))))
 Providing data for key 72
 (#<PROCESS Anonymous thread(37) [Active] #x...> #<PROCESS Anonymous thread(38) [semaphore wait] #x...> #<PROCESS Anonymous thread(39) [semaphore wait] #x...> #<PROCESS Anonymous thread(40) [semaphore wait] #x...> #<PROCESS Anonymous thread(41) [semaphore wait] #x...> #<PROCESS Anonymous thread(42) [semaphore wait] #x...> #<PROCESS Anonymous thread(43) [semaphore wait] #x...> #<PROCESS Anonymous thread(44) [semaphore wait] #x...> #<PROCESS Anonymous thread(45) [semaphore wait] #x...> #<PROCESS Anonymous thread(46) [semaphore wait] #x...>)
-Cleaning up: value for 42
-Cleaning up: value for 33
 * (mapcar #'bt:join-thread *)
 ("value for 72" "value for 72" "value for 72" "value for 72" "value for 72" "value for 72" "value for 72" "value for 72" "value for 72" "value for 72")
 * (loop with first = (first *)
@@ -162,10 +171,96 @@ Finally, get rid of all the cached data:
 
 ```lisp
 * (cacle:cache-flush *my-cache*)
-Cleaning up: value for 24
-Cleaning up: value for 72
+NIL
+* (cacle:cache-size *my-cache*)
+0
+* (cacle:cache-count *my-cache*)
+0
+```
+
+To facilitate situations where data expiring from the cache needs some
+cleaning up - such as in the abovementioned case of the cache being on
+the disk - an optional cleanup function can be defined for the cache.
+This function is called whenever a block of data is discarded from the
+cache.
+
+```lisp
+* (defun test-cleanup (data)
+    (format t "Cleaning up: ~a~%" data))
+TEST-CLEANUP
+* (setf *my-cache* (cacle:make-cache 100 #'test-provider :policy :lru :cleanup #'test-cleanup))
+#<CACHE #x...>
+```
+
+As cacle is designed to be used on multiple threads, a situation may
+arise where multiple threads request data from the cache
+simultaneously and an entry is removed from the cache by another
+thread before the thread that requested it can use the data.  To
+prevent this situation, when a cleanup function has been defined for
+the cache, each call to *cache-fetch* must be paired with a call to
+*cache-release*.  The release function is given as an argument the
+second value returned by *cache-fetch*.  The cleanup function will not
+be called for the data if there are live references (fetches without
+corresponding releases) for the data.
+
+```lisp
+* (defparameter *42* (multiple-value-list (cacle:cache-fetch *my-cache* 42)))
+Providing data for key 42
+*42*
+* *42*
+("value for 42" #<LINKED-CACHE-ENTRY key 42 #x...>)
+```
+
+The tag datum should be treated opaque by the caller and used only as
+an argument to *cache-release*.
+
+A utility macro, *with-cache-fetch*, is provided for ensuring the
+pairing of *cache-fetch* and *cache-release*:
+
+```lisp
+* (cacle:with-cache-fetch item (*my-cache* 17)
+    (format t "my data: ~a~%" item))
+Providing data for key 17
+my data: value for 17
+NIL
+* (cacle:with-cache-fetch item (*my-cache* 33)
+    (format t "my data: ~a~%" item))
+Providing data for key 33
+my data: value for 33
+NIL
+* (cacle:with-cache-fetch item (*my-cache* 24)
+    (format t "my data: ~a~%" item))
+Providing data for key 24
+my data: value for 24
+NIL
+* (cacle:with-cache-fetch item (*my-cache* 55)
+    (format t "my data: ~a~%" item))
+Providing data for key 55
+Cleaning up: value for 33
+Cleaning up: value for 17
+my data: value for 55
 NIL
 ```
+
+Note that even before the last function call, the item for the key 42
+has already expired from the cache, since the total would otherwise
+exceed the cache's limit of 100.  However, it has not been cleaned up,
+because it is still reserved by the very first call to *cache-fetch*
+that has not been matched with the call to *cache-release* yet.
+
+```lisp
+* (cacle:cache-release *my-cache* (second *42*))
+Cleaning up: value for 42
+NIL
+```
+
+**Note!** This example also demonstrates a property in the design of cacle that
+should be understood before using it: The maximum size defined for the
+cache is the size of the live objects in the cache and does not
+include items that have already been scheduled for removal, pending a
+call to *cache-release*, or items that are being fetched to the cache.
+That is, the total size of the cache may exceed its limit by the
+combined size of the items currently being used by the application.
 
 ### 3.2. A simple CDN node
 
@@ -173,7 +268,8 @@ A simple node in a content distribution network could be built using
 cacle as follows.  The content being distributed is fetched from a
 content server, and the cache resides on the local disk.
 
-*Warning: untested code - written as an example, not to be used in a real world CDN*
+*Warning: untested code - written as an example, not to be used as a
+real world CDN*
 
 ```
 (defparameter *content-server* "http://server.example.com/")
@@ -211,7 +307,7 @@ content server, and the cache resides on the local disk.
 
 ;; Function called by the web server to serve a certain file
 (defun serve-file (uri)
-  (let ((file (cacle:cache-fetch *cache* uri)))
+  (cacle:with-cache-fetch file (*cache* uri)
     (if file
 	    (progn
 		  ;; Send back the data in file
@@ -225,11 +321,6 @@ That's it.  On an incoming request, *serve-file* will fetch the
 corresponding content from a file in the cache.  If the content is not
 cached, it is transparently fetched from the content server, stored in
 the cache, and sent to the end user.
-
-Note that the code does not correctly handle the case where
-*cache-fetch* returns a cached content file, but before the web server
-is able to send the data to the end user, a cache miss happens in
-another thread causing the file to be cleaned up.
 
 ## 4. Cache replacement policies
 
@@ -414,11 +505,25 @@ that is being discarded from the cache.  The function receives a
 single parameter - the data - and its return value is discarded.
 
 ---
-[Generic function] **cache-fetch** *cache key* => *datum*
+[Generic function] **cache-fetch** *cache &key only-if-cached* => *(values datum tag)*
 
 Fetches a datum from the cache for the given key.  If the datum is not
-currently cached, it is retrieved from the provider function, added to
-the cache, and then returned.
+currently cached and the *only-if-cached* flag is not set, it is
+retrieved from the provider function, added to the cache, and then
+returned.  The *tag* return value must be specified in a corresponding
+call to *cache-release* before it will be cleaned up.
+
+---
+[Generic function] **cache-release** *cache tag* => *NIL*
+
+Releases a reference obtained by a call to *cache-fetch*.
+
+---
+[Macro] **with-cache-fetch** *var (cache key &key only-if-cached) &body body*
+
+Wraps the given body between calls to *cache-fetch* and
+*cache-release*, ensuring that the data fetched from the cache is
+valid inside *body* and will be released afterwards.
 
 ---
 [Generic function] **cache-remove** *cache key* => *(or T NIL)*
@@ -561,6 +666,28 @@ serving as a point for attaching the actual data nodes.
 
 These classes implement their respective cache replacement policies.
 
-## 6. License
+## 6. Tests
+
+Unit tests for cacle are written using
+[FiveAM](https://common-lisp.net/project/fiveam/).  They are hidden
+behind the *#+5am* read-time conditional; to enable the tests, load
+FiveAM before compiling cacle.  After that, you can run the test suite
+from the REPL:
+
+```lisp
+* (5am:run! 'cacle:cacle-tests)
+
+Running test suite CACLE-TESTS
+ Running test [...]
+ [...]
+ Did 619 checks.
+    Pass: 619 (100%)
+    Skip: 0 ( 0%)
+    Fail: 0 ( 0%)
+
+NIL
+```
+
+## 7. License
 
 [MIT](https://opensource.org/licenses/MIT)
