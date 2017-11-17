@@ -13,6 +13,16 @@
    (lifetime :initarg :lifetime :initform nil :reader cache-lifetime)
    (policy :initform :fifo :initarg :policy :reader cache-policy)))
 
+(defmethod print-object ((obj cache) stream)
+  (print-unreadable-object (obj stream :type t :identity t)
+    (bt:with-lock-held ((slot-value obj 'lock))
+      (princ "count " stream)
+      (princ (hash-table-count (slot-value obj 'hash)) stream)
+      (princ " size " stream)
+      (princ (slot-value obj 'size) stream)
+      (princ "/" stream)
+      (prin1 (cache-max-size obj) stream))))
+
 (defmethod initialize-instance ((cache cache) &rest initargs &key policy provider (hash-test 'eql) &allow-other-keys)
   (declare (ignore initargs))
   (call-next-method)
