@@ -55,10 +55,10 @@ holds the contents of the data block.
 * (defun test-provider (key)
     "A provider returns two values: The data for the element, and the element's size."
     (format t "Providing data for key ~a~%" key)
-	;; Fetching the data takes some time...
-	(sleep 1)
+    ;; Fetching the data takes some time...
+    (sleep 1)
     (values (format nil "value for ~a" key)
-	        key))
+            key))
 TEST-PROVIDER
 ```
 
@@ -154,16 +154,16 @@ once, with all threads eventually getting the same result data:
 ```lisp
 * (loop with out = *standard-output*
         for i below 10
-	    collect (bt:make-thread #'(lambda ()
-					                (let ((*standard-output* out))
-					                  (cacle:cache-fetch *my-cache* 72)))))
+        collect (bt:make-thread #'(lambda ()
+                                    (let ((*standard-output* out))
+                                      (cacle:cache-fetch *my-cache* 72)))))
 Providing data for key 72
 (#<PROCESS Anonymous thread(37) [Active] #x...> #<PROCESS Anonymous thread(38) [semaphore wait] #x...> #<PROCESS Anonymous thread(39) [semaphore wait] #x...> #<PROCESS Anonymous thread(40) [semaphore wait] #x...> #<PROCESS Anonymous thread(41) [semaphore wait] #x...> #<PROCESS Anonymous thread(42) [semaphore wait] #x...> #<PROCESS Anonymous thread(43) [semaphore wait] #x...> #<PROCESS Anonymous thread(44) [semaphore wait] #x...> #<PROCESS Anonymous thread(45) [semaphore wait] #x...> #<PROCESS Anonymous thread(46) [semaphore wait] #x...>)
 * (mapcar #'bt:join-thread *)
 ("value for 72" "value for 72" "value for 72" "value for 72" "value for 72" "value for 72" "value for 72" "value for 72" "value for 72" "value for 72")
 * (loop with first = (first *)
-	    for i in *
-	    always (eq i first))
+        for i in *
+        always (eq i first))
 T
 ```
 
@@ -279,20 +279,20 @@ real world CDN*
 (defun fetch-content (uri)
   ;; This provider function retrieves data from the content server
   (let* (size
-	     (file (fad:with-output-to-temporary-file (out :template *cache-path* 
+         (file (fad:with-output-to-temporary-file (out :template *cache-path* 
                                                        :element-type '(unsigned-byte 8))
                  (multiple-value-bind (in status)
-	                 (drakma:http-request (concatenate 'string *content-server* uri)
-			 		                      :want-stream t)
-	               ;; Copy the retrieved data into a file
-	               (when (<= 200 status 299)
-				     (fad:copy-stream in out)
-					 (setf size (file-length out)))))))
-	(if size
-	    (values file size) ; success
-	    (progn ; error
-		  (ignore-errors (delete-file file))
-		  (values nil 0)))))
+                     (drakma:http-request (concatenate 'string *content-server* uri)
+                                          :want-stream t)
+                   ;; Copy the retrieved data into a file
+                   (when (<= 200 status 299)
+                     (fad:copy-stream in out)
+                     (setf size (file-length out)))))))
+    (if size
+        (values file size) ; success
+        (progn ; error
+          (ignore-errors (delete-file file))
+          (values nil 0)))))
 
 (defun cleanup-content (file)
   ;; When content removed from the cache, delete the corresponding file
@@ -301,20 +301,20 @@ real world CDN*
 ;; Set object lifetime to 3600 seconds to force a refresh once per hour
 (defparameter *cache* (cacle:make-cache *disk-space* #'fetch-content 
                                         :test 'equal
-										:cleanup #'cleanup-content
-										:policy :lfuda
-										:lifetime 3600))
+                                        :cleanup #'cleanup-content
+                                        :policy :lfuda
+                                        :lifetime 3600))
 
 ;; Function called by the web server to serve a certain file
 (defun serve-file (uri)
   (cacle:with-cache-fetch file (*cache* uri)
     (if file
-	    (progn
-		  ;; Send back the data in file
-		  ...)
-	    (progn
-		  ;; Report a 404 not found
-		  ))))
+        (progn
+          ;; Send back the data in file
+          ...)
+        (progn
+          ;; Report a 404 not found
+          ))))
 ```
 
 That's it.  On an incoming request, *serve-file* will fetch the
