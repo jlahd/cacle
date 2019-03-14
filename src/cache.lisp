@@ -210,8 +210,17 @@ If a cleanup function is defined for the cache, remember to call cache-release w
 	(if hit
 	    (values data entry)
 	    (multiple-value-bind (content size)
-		(funcall provider key)
+		(handler-case (funcall provider key)
+		  (error (e)
+		    (bt:with-lock-held (lock)
+		      (remhash key hash)
+		      (bt:condition-notify (slot-value data 'pending))
+		      (slot-makunbound data 'pending))
+		    (error e)))
 	      (with-collected-cleanups (cache)
+		(unless (typep size 'real)
+		  (setf size (if content 1 0))
+		  (warn "Cache provider did not return a proper size for the data - assuming size of ~d" size))
 		(bt:with-lock-held (lock)
 		  (setf (slot-value data 'data) content
 			(slot-value data 'size) size)
