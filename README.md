@@ -505,13 +505,17 @@ that is being discarded from the cache.  The function receives a
 single parameter - the data - and its return value is discarded.
 
 ---
-[Generic function] **cache-fetch** *cache &key only-if-cached* => *(values datum tag)*
+[Generic function] **cache-fetch** *cache &key only-if-cached force-fetch* => *(values datum tag)*
 
 Fetches a datum from the cache for the given key.  If the datum is not
 currently cached and the *only-if-cached* flag is not set, it is
 retrieved from the provider function, added to the cache, and then
 returned.  The *tag* return value must be specified in a corresponding
 call to *cache-release* before it will be cleaned up.
+
+If the *force-fetch* flag is set, the fetch is atomically preceded by
+a call to *cache-release*, effectively fetching a new value from the
+provider.
 
 ---
 [Generic function] **cache-release** *cache tag* => *NIL*

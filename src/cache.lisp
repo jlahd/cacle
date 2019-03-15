@@ -139,14 +139,22 @@
 
 (defsetf cache-lifetime set-cache-lifetime)
 
-(defmethod cache-fetch ((cache cache) key &key only-if-cached)
+(defmethod cache-fetch ((cache cache) key &key only-if-cached force-fetch)
   "Fetch an item for the given key.
 If the item is not currently in the cache, or has expired, it is fetched from the provider and stored in the cache.
+If force-fetch is specified, a new value is fetched from the provider even if it already exists in the cache.
 If a cleanup function is defined for the cache, remember to call cache-release with the second value returned by cache-fetch!"
   (with-slots (lock hash policy provider) cache
     (with-collected-cleanups (cache)
       (multiple-value-bind (hit data entry)
 	  (bt:with-lock-held (lock)
+	    (when force-fetch
+	      (let ((entry (gethash key hash)))
+		(when entry
+		  (prepare-cleanup entry hash)
+		  (decf (slot-value cache 'size) (slot-value entry 'size))
+		  (when policy
+		    (entry-removed policy entry)))))
 	    (flet ((miss ()
 		     (let ((entry (make-instance 'cache-entry :key key :pending (bt:make-condition-variable))))
 		       (setf (gethash key hash) entry)

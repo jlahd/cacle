@@ -4,7 +4,7 @@
 
 (asdf:defsystem cacle
   :name "cacle"
-  :version "1.0.0"
+  :version "1.0.1"
   :author "Jussi Lahdenniemi <jussi@lahdenniemi.fi>"
   :maintainer "Jussi Lahdenniemi <jussi@lahdenniemi.fi>"
   :license "MIT"
